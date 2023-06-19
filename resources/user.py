@@ -7,6 +7,11 @@ from mysql_connection import get_connection
 
 from email_validator import validate_email, EmailNotValidError
 
+from utils import check_password, hash_password
+
+from flask_jwt_extended import create_access_token, get_jwt, jwt_required
+
+
 class UserRegisterResource(Resource):
     
     def post(self) :
@@ -32,6 +37,136 @@ class UserRegisterResource(Resource):
 
         if len(data['password']) < 4 or len(data['password']) > 12 :
             return {'result' : 'fale', 'error' : '비번 길이 에러'}, 400
+        
+        # 4. 비밀번호를 암호화 한다.
 
-        return
+        hashed_password = hash_password( data['password'])
+        print('해킹안될거야',str(hashed_password))
+
+        # 5. DB에 이미 회원정보가 있는지 확인한다.
+
+        try :
+            connection = get_connection()
+            query = ''' select *
+                    from user
+                    where email = %s;
+                    '''
+            record = ( data['email'], )
+
+            cursor = connection.cursor(dictionary=True)
+            cursor.execute(query, record)
+
+            result_list = cursor.fetchall()
+
+            print(result_list)
+
+            if len(result_list) == 1 : # 회원 가입이 되어있는 경우 리턴
+               return { 'result':'fail', 'error':'이미 회원가입 한 사람'},400
+           
+            # 회원이 아니므로 , 회원가입 코드를 작성한다.
+            # DB에 저장ㅎ한다.
+
+            query ='''insert into user
+                        (username, email, password)
+                        values
+                        (%s,%s,%s);'''
+            
+            record = (data['username'],
+                        data['email'],
+                        hashed_password)
+        
+            cursor = connection.cursor(dictionary=True)
+            cursor.execute(query, record)
+           
+            connection.commit()
+
+            ### DB에 데이터를 insert 한 후에
+            ### 그 인서트된 행의 아이디를 가져오는 코드!!
+
+            user_id = cursor.lastrowid
+
+            cursor.close()
+            connection.close()
+
+        except Error as e :
+            print(e)
+            return {'result':'fail', 'error':str(e)},500
+        
+        # 암호화 해라 (인증토큰 만들어라)
+
+        # create_access_token(user_id, expires_delta=datetime.timedelta(days=10))  
+        access_token = create_access_token(user_id)
+
+
+        return {'result' : 'success', 'access_token':access_token }
     
+
+
+#  로그인 관련 개발
+
+class UserLoginsource(Resource):
+    
+    def post(self) :
+
+        # {
+        #     "email" : "abc@naver.com",
+        #     "password" : "1234"
+        # }
+        
+        # 1. 클라이언트로부터 데이터 받아온다.
+        data = request.get_json()
+        # 2. 이메일 주소로, DB에 select 한다.
+        try :
+            connection = get_connection()
+            query = ''' select *
+                        from user
+                        where email = %s;'''
+            record = (data['email'] , )
+
+            cursor = connection.cursor(dictionary=True)
+            cursor.execute(query,record)
+
+            result_list = cursor.fetchall()
+
+            cursor.close()
+            connection.close()
+
+        except Error as e:
+            print(e)
+            return {'result' : 'fail', 'error' : str(e)},500
+
+        if len(result_list) == 0 :
+                return {'result' : 'fail', 'error' : '회원가입한 사람 아님'}, 400 # 400은 http 상태코드  
+            
+        # 3. 비밀번호가 일치 하는지 확인한다.
+        #    암호화된 비밀번호가 일치하는지 확인해야 함.
+        print(result_list)    
+        check = check_password(data['password'],result_list[0]['password'])
+        if check == False:
+            return {'result':'fail' , 'error':'비번 틀렸음'},400
+        
+       
+        # 4. 클라이언트한테 보내줄 데이터를 보내준다.   
+
+        access_token = create_access_token(result_list[0]['id'])
+
+
+
+        return {'result':'success', 'access_token': access_token }
+    
+
+# 로그아웃
+## 로그아웃된 토큰을 저장할 set 을 만든다.
+
+jwt_blocklist = set()
+
+class UserLogoutsource(Resource):
+    
+    @jwt_required() # 아래의 delete 함수는 jwt 토큰이 있어야 한다.
+    def delete(self) :
+
+        jti = get_jwt()['jti']
+        print(jti)
+        jwt_blocklist.add(jti)
+
+        return {'result':'success'}
